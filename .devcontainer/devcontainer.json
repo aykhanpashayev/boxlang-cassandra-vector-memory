@@ -4,12 +4,12 @@
   "service": "dev",
   "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
   "forwardPorts": [9042],
-  "postCreateCommand": "java -version",
   "customizations": {
     "vscode": {
       "extensions": [
         "ortus-solutions.vscode-boxlang"
       ]
     }
-  }
+  },
+  "postCreateCommand": "bash .devcontainer/postCreate.sh"
 }
