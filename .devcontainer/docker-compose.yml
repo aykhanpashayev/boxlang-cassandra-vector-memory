@@ -1,0 +1,18 @@
+version: "3.9"
+
+services:
+  dev:
+    image: mcr.microsoft.com/devcontainers/java:1-17-bullseye
+    volumes:
+      - ..:/workspaces:cached
+      # Enable docker CLI inside the dev container (for debugging/logs)
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: sleep infinity
+    depends_on:
+      - cassandra
+
+  cassandra:
+    image: cassandra:5.0
+    container_name: cassandra
+    ports:
+      - "9042:9042"
