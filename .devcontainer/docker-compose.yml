@@ -20,7 +20,8 @@ services:
       start_period: 30s
 
   devcontainer:
-    image: mcr.microsoft.com/devcontainers/java:1-17-bullseye
+    # ✅ Java 21 so BoxLang installer doesn't prompt/fail
+    image: mcr.microsoft.com/devcontainers/java:1-21-bullseye
     container_name: devcontainer
     depends_on:
       cassandra:

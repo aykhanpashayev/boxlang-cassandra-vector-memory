@@ -5,15 +5,12 @@ echo "== [postCreate] START =="
 
 # ------------------------------------------------------------
 # 1) Fix Codespaces apt-get update failures due to Yarn APT repo
-#    (NO_PUBKEY 62D54FD4003F6525 / dl.yarnpkg.com)
 # ------------------------------------------------------------
 echo "== [postCreate] Fix Yarn APT repo issues (disable/remove) =="
 
-# Remove common Yarn source list files if present
 sudo rm -f /etc/apt/sources.list.d/yarn.list || true
 sudo rm -f /etc/apt/sources.list.d/yarn*.list || true
 
-# Remove any apt source line containing dl.yarnpkg.com if it exists elsewhere
 if sudo grep -R "dl\.yarnpkg\.com" -n /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null; then
   echo "Found Yarn repo entries; stripping them..."
   sudo sed -i.bak '/dl\.yarnpkg\.com/d' /etc/apt/sources.list || true
@@ -23,7 +20,6 @@ if sudo grep -R "dl\.yarnpkg\.com" -n /etc/apt/sources.list /etc/apt/sources.lis
   done
 fi
 
-# Clean up any stale lists to avoid cached signature errors
 sudo rm -rf /var/lib/apt/lists/*
 
 echo "== [postCreate] apt-get update & base tools =="
@@ -37,7 +33,9 @@ sudo apt-get install -y --no-install-recommends \
   coreutils \
   python3 \
   procps \
-  netcat-openbsd
+  netcat-openbsd \
+  unzip \
+  findutils
 
 # ------------------------------------------------------------
 # 2) Install cqlsh reliably via Cassandra binary tarball (no pip)
@@ -56,39 +54,76 @@ if [ ! -d "${CASSANDRA_TOOLS_DIR}" ]; then
   rm -f "/tmp/${CASSANDRA_TOOLS_TARBALL}"
 fi
 
-# Symlink cqlsh into PATH
 sudo ln -sf "${CASSANDRA_TOOLS_DIR}/bin/cqlsh" /usr/local/bin/cqlsh
 sudo chmod +x /usr/local/bin/cqlsh
 
-# Ensure cqlsh can find its python libs if needed
-# (Many distros work without this, but this makes it deterministic.)
 PROFILE_SNIPPET="/etc/profile.d/cassandra-tools.sh"
 if [ ! -f "${PROFILE_SNIPPET}" ]; then
-  echo "== [postCreate] Write ${PROFILE_SNIPPET} for PYTHONPATH/PATH stability =="
   cat <<EOF | sudo tee "${PROFILE_SNIPPET}" >/dev/null
 export CASSANDRA_HOME="${CASSANDRA_TOOLS_DIR}"
 export PATH="\$PATH:${CASSANDRA_TOOLS_DIR}/bin"
-# cqlsh uses python + cassandra pylib shipped in the tarball
 export PYTHONPATH="\${PYTHONPATH:-}:${CASSANDRA_TOOLS_DIR}/pylib"
 EOF
 fi
 
 # ------------------------------------------------------------
-# 3) Install BoxLang runtime (official quick installer)
+# 3) Ensure Java 21+ (BoxLang requirement)
 # ------------------------------------------------------------
-echo "== [postCreate] Install BoxLang runtime (official installer) =="
-# System-wide install so `boxlang` is on PATH for everyone.
-# If already installed, installer should no-op or upgrade safely.
-sudo /bin/bash -c "$(curl -fsSL https://install.boxlang.io)"
+echo "== [postCreate] Verify Java version (BoxLang requires 21+) =="
+JAVA_MAJOR="$(java -version 2>&1 | awk -F[\".] '/version/ {print $2}')"
+if [ "${JAVA_MAJOR}" -lt 21 ]; then
+  echo "ERROR: Java 21+ required but found Java ${JAVA_MAJOR}. (Use java:1-21-bullseye image)"
+  exit 1
+fi
 
 # ------------------------------------------------------------
-# 4) Health check: wait for Cassandra to accept CQL connections
+# 4) Install BoxLang runtime from official ZIP (NON-INTERACTIVE)
+#    Source: https://downloads.ortussolutions.com/ortussolutions/boxlang/boxlang-latest.zip
+# ------------------------------------------------------------
+echo "== [postCreate] Install BoxLang runtime from ZIP (no prompts) =="
+
+BOXLANG_ZIP_URL="https://downloads.ortussolutions.com/ortussolutions/boxlang/boxlang-latest.zip"
+BOXLANG_DIR="/usr/local/boxlang"
+TMP_ZIP="/tmp/boxlang-latest.zip"
+
+# If boxlang already exists, skip download
+if command -v boxlang >/dev/null 2>&1; then
+  echo "BoxLang already installed: $(command -v boxlang)"
+else
+  sudo rm -rf "${BOXLANG_DIR}"
+  sudo mkdir -p "${BOXLANG_DIR}"
+
+  curl -fsSL "${BOXLANG_ZIP_URL}" -o "${TMP_ZIP}"
+  sudo unzip -q "${TMP_ZIP}" -d "${BOXLANG_DIR}"
+  rm -f "${TMP_ZIP}"
+
+  # Find the actual boxlang launcher inside the extracted tree
+  # Common layout is: /usr/local/boxlang/**/bin/boxlang
+  BOXLANG_BIN_PATH="$(sudo find "${BOXLANG_DIR}" -type f -name boxlang 2>/dev/null | head -n 1 || true)"
+  if [ -z "${BOXLANG_BIN_PATH}" ]; then
+    echo "ERROR: Could not locate 'boxlang' executable inside ${BOXLANG_DIR}"
+    sudo find "${BOXLANG_DIR}" -maxdepth 4 -type f | head -n 200 || true
+    exit 1
+  fi
+
+  sudo chmod +x "${BOXLANG_BIN_PATH}"
+  sudo ln -sf "${BOXLANG_BIN_PATH}" /usr/local/bin/boxlang
+
+  # Also ensure libs/scripts can be found when running
+  # (some distros rely on relative paths; keep working dir stable)
+  cat <<EOF | sudo tee /etc/profile.d/boxlang.sh >/dev/null
+export BOXLANG_HOME="${BOXLANG_DIR}"
+EOF
+fi
+
+# ------------------------------------------------------------
+# 5) Health check: wait for Cassandra to accept CQL connections
 # ------------------------------------------------------------
 echo "== [postCreate] Wait for Cassandra (cassandra:9042) =="
 bash .devcontainer/wait-for-cassandra.sh
 
 # ------------------------------------------------------------
-# 5) Verify toolchain versions
+# 6) Verify toolchain versions
 # ------------------------------------------------------------
 echo "== [postCreate] Verify cqlsh =="
 cqlsh --version
