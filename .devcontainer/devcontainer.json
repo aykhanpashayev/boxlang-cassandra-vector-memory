@@ -1,15 +1,17 @@
 {
   "name": "boxlang-cassandra-vector-memory",
-  "dockerComposeFile": "docker-compose.yml",
-  "service": "dev",
-  "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
-  "forwardPorts": [9042],
+  "dockerComposeFile": [
+    "docker-compose.yml"
+  ],
+  "service": "devcontainer",
+  "workspaceFolder": "/workspaces/boxlang-cassandra-vector-memory",
+  "remoteUser": "vscode",
+  "postCreateCommand": "bash .devcontainer/postCreate.sh",
   "customizations": {
     "vscode": {
-      "extensions": [
-        "ortus-solutions.vscode-boxlang"
-      ]
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
     }
-  },
-  "postCreateCommand": "bash .devcontainer/postCreate.sh |& tee .devcontainer-postCreate.log"
+  }
 }
