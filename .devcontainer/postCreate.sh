@@ -1,101 +1,99 @@
 #!/usr/bin/env bash
 set -euo pipefail
-export DEBIAN_FRONTEND=noninteractive
 
-echo "== postCreate: starting =="
-echo "whoami: $(whoami)"
-echo "pwd: $(pwd)"
+echo "== [postCreate] START =="
 
-echo "== Fix: remove broken Yarn APT source (common Codespaces issue) =="
-sudo rm -f /etc/apt/sources.list.d/yarn.list /etc/apt/sources.list.d/yarn*.list || true
+# ------------------------------------------------------------
+# 1) Fix Codespaces apt-get update failures due to Yarn APT repo
+#    (NO_PUBKEY 62D54FD4003F6525 / dl.yarnpkg.com)
+# ------------------------------------------------------------
+echo "== [postCreate] Fix Yarn APT repo issues (disable/remove) =="
 
-echo "== apt-get update =="
-sudo apt-get update
+# Remove common Yarn source list files if present
+sudo rm -f /etc/apt/sources.list.d/yarn.list || true
+sudo rm -f /etc/apt/sources.list.d/yarn*.list || true
 
-echo "== install base tools (curl, python3, docker CLI) =="
-sudo apt-get install -y \
-  ca-certificates curl tar python3 \
-  docker.io docker-compose
-
-echo "== verify docker CLI (optional but useful) =="
-docker --version || true
-docker compose version || true
-docker ps >/dev/null 2>&1 || echo "NOTE: docker daemon not accessible (socket mount issue)."
-
-# -----------------------------
-# Install cqlsh reliably (from official Apache Cassandra tarball)
-# (we only need the tools; Cassandra itself runs as a separate container)
-# -----------------------------
-echo "== install cqlsh (Cassandra tools tarball) =="
-
-CASSANDRA_VERSION="5.0.6"
-CASSANDRA_DIR="/opt/cassandra"
-TGZ="apache-cassandra-${CASSANDRA_VERSION}-bin.tar.gz"
-URL="https://downloads.apache.org/cassandra/${CASSANDRA_VERSION}/${TGZ}"
-
-sudo mkdir -p "${CASSANDRA_DIR}"
-cd /tmp
-
-# download only if missing
-if [ ! -f "/tmp/${TGZ}" ]; then
-  curl -fL -o "/tmp/${TGZ}" "${URL}"
-fi
-
-sudo tar -xzf "/tmp/${TGZ}" -C "${CASSANDRA_DIR}"
-sudo ln -sf "${CASSANDRA_DIR}/apache-cassandra-${CASSANDRA_VERSION}/bin/cqlsh" /usr/local/bin/cqlsh
-
-echo "cqlsh:"
-cqlsh --version || true
-
-# -----------------------------
-# Install BoxLang CLI (official current installer)
-# -----------------------------
-echo "== install BoxLang CLI (official installer) =="
-
-# This is the current official install command published on the BoxLang download page.
-# It should install a system-wide `boxlang` command.
-sudo /bin/bash -c "$(curl -fsSL https://install.boxlang.io)"
-
-# Guarantee `boxlang` is discoverable (handle different install locations safely)
-if command -v boxlang >/dev/null 2>&1; then
-  echo "BoxLang found on PATH: $(command -v boxlang)"
-else
-  echo "BoxLang not on PATH, searching common locations..."
-  for candidate in \
-    "/usr/local/bin/boxlang" \
-    "/usr/bin/boxlang" \
-    "$HOME/.boxlang/bin/boxlang" \
-    "/opt/boxlang/bin/boxlang"
-  do
-    if [ -x "$candidate" ]; then
-      echo "Found BoxLang at: $candidate"
-      sudo ln -sf "$candidate" /usr/local/bin/boxlang
-      break
-    fi
+# Remove any apt source line containing dl.yarnpkg.com if it exists elsewhere
+if sudo grep -R "dl\.yarnpkg\.com" -n /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null; then
+  echo "Found Yarn repo entries; stripping them..."
+  sudo sed -i.bak '/dl\.yarnpkg\.com/d' /etc/apt/sources.list || true
+  for f in /etc/apt/sources.list.d/*.list; do
+    [ -f "$f" ] || continue
+    sudo sed -i.bak '/dl\.yarnpkg\.com/d' "$f" || true
   done
 fi
 
-echo "== verify BoxLang =="
-which boxlang || true
-boxlang --version || true
+# Clean up any stale lists to avoid cached signature errors
+sudo rm -rf /var/lib/apt/lists/*
 
-echo "== quick check: wait for Cassandra port 9042 to be ready =="
-python3 - << 'PY'
-import socket, time
-host="cassandra"; port=9042
-for i in range(60):
-    s=socket.socket(); s.settimeout(1)
-    try:
-        s.connect((host,port))
-        print("OK: cassandra:9042 reachable")
-        raise SystemExit(0)
-    except Exception:
-        time.sleep(2)
-    finally:
-        try: s.close()
-        except: pass
-print("WARN: cassandra:9042 not reachable yet (may still be booting).")
-PY
+echo "== [postCreate] apt-get update & base tools =="
+sudo apt-get update -y
+sudo apt-get install -y --no-install-recommends \
+  ca-certificates \
+  curl \
+  tar \
+  gzip \
+  bash \
+  coreutils \
+  python3 \
+  procps \
+  netcat-openbsd
 
-echo "== postCreate: done =="
-echo "Log saved to: .devcontainer-postCreate.log"
+# ------------------------------------------------------------
+# 2) Install cqlsh reliably via Cassandra binary tarball (no pip)
+# ------------------------------------------------------------
+CASSANDRA_TOOLS_VERSION="5.0.6"
+CASSANDRA_TOOLS_TARBALL="apache-cassandra-${CASSANDRA_TOOLS_VERSION}-bin.tar.gz"
+CASSANDRA_TOOLS_URL="https://archive.apache.org/dist/cassandra/${CASSANDRA_TOOLS_VERSION}/${CASSANDRA_TOOLS_TARBALL}"
+CASSANDRA_TOOLS_DIR="/opt/apache-cassandra-${CASSANDRA_TOOLS_VERSION}"
+
+echo "== [postCreate] Install cqlsh from Cassandra tools tarball: ${CASSANDRA_TOOLS_URL} =="
+
+if [ ! -d "${CASSANDRA_TOOLS_DIR}" ]; then
+  sudo mkdir -p /opt
+  curl -fsSL "${CASSANDRA_TOOLS_URL}" -o "/tmp/${CASSANDRA_TOOLS_TARBALL}"
+  sudo tar -xzf "/tmp/${CASSANDRA_TOOLS_TARBALL}" -C /opt
+  rm -f "/tmp/${CASSANDRA_TOOLS_TARBALL}"
+fi
+
+# Symlink cqlsh into PATH
+sudo ln -sf "${CASSANDRA_TOOLS_DIR}/bin/cqlsh" /usr/local/bin/cqlsh
+sudo chmod +x /usr/local/bin/cqlsh
+
+# Ensure cqlsh can find its python libs if needed
+# (Many distros work without this, but this makes it deterministic.)
+PROFILE_SNIPPET="/etc/profile.d/cassandra-tools.sh"
+if [ ! -f "${PROFILE_SNIPPET}" ]; then
+  echo "== [postCreate] Write ${PROFILE_SNIPPET} for PYTHONPATH/PATH stability =="
+  cat <<EOF | sudo tee "${PROFILE_SNIPPET}" >/dev/null
+export CASSANDRA_HOME="${CASSANDRA_TOOLS_DIR}"
+export PATH="\$PATH:${CASSANDRA_TOOLS_DIR}/bin"
+# cqlsh uses python + cassandra pylib shipped in the tarball
+export PYTHONPATH="\${PYTHONPATH:-}:${CASSANDRA_TOOLS_DIR}/pylib"
+EOF
+fi
+
+# ------------------------------------------------------------
+# 3) Install BoxLang runtime (official quick installer)
+# ------------------------------------------------------------
+echo "== [postCreate] Install BoxLang runtime (official installer) =="
+# System-wide install so `boxlang` is on PATH for everyone.
+# If already installed, installer should no-op or upgrade safely.
+sudo /bin/bash -c "$(curl -fsSL https://install.boxlang.io)"
+
+# ------------------------------------------------------------
+# 4) Health check: wait for Cassandra to accept CQL connections
+# ------------------------------------------------------------
+echo "== [postCreate] Wait for Cassandra (cassandra:9042) =="
+bash .devcontainer/wait-for-cassandra.sh
+
+# ------------------------------------------------------------
+# 5) Verify toolchain versions
+# ------------------------------------------------------------
+echo "== [postCreate] Verify cqlsh =="
+cqlsh --version
+
+echo "== [postCreate] Verify boxlang =="
+boxlang --version
+
+echo "== [postCreate] DONE =="
