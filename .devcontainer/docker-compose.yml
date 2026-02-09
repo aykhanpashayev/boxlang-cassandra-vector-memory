@@ -1,3 +1,5 @@
+version: "3.9"
+
 services:
   dev:
     image: mcr.microsoft.com/devcontainers/java:1-17-bullseye
