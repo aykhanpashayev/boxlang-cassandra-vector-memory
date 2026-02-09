@@ -1,0 +1,14 @@
+services:
+  dev:
+    image: mcr.microsoft.com/devcontainers/java:1-17-bullseye
+    volumes:
+      - ..:/workspaces:cached
+    command: sleep infinity
+    depends_on:
+      - cassandra
+
+  cassandra:
+    image: cassandra:5.0
+    container_name: cassandra
+    ports:
+      - "9042:9042"

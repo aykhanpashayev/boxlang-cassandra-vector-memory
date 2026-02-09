@@ -1,0 +1,15 @@
+{
+  "name": "boxlang-cassandra-vector-memory",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "dev",
+  "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+  "forwardPorts": [9042],
+  "postCreateCommand": "java -version",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ortus-solutions.vscode-boxlang"
+      ]
+    }
+  }
+}
